@@ -37,7 +37,7 @@ def _project_point(K, R, t, X):
 
 
 def bundle_adjust_local(
-    sfm_map: LandmarkMapping,
+    landmark_map: LandmarkMapping,
     window_size: int = 8,
     fixed_cams: int = 2,
     max_nfev: int = 100,
@@ -47,23 +47,23 @@ def bundle_adjust_local(
     Local BA is a sliding-window optimizer. It only includes points that are observed by 
     cameras inside the recent BA window, and only if they appear at least twice in that window.
     """
-    if sfm_map.n_cameras < max(window_size, fixed_cams + 1):
+    if landmark_map.n_cameras < max(window_size, fixed_cams + 1):
         return {"ran": False, "reason": "too few cameras"}
 
-    window_cams = sfm_map.cameras[-window_size:]
+    window_cams = landmark_map.cameras[-window_size:]
     fixed_cams = min(fixed_cams, len(window_cams) - 1)
 
     opt_cams = window_cams[fixed_cams:]
 
     point_obs_counts = {}
     for cam in window_cams:
-        for record in sfm_map.get_observations(cam.name).values():
+        for record in landmark_map.get_observations(cam.name).values():
             pid = record["point_idx"]
             point_obs_counts[pid] = point_obs_counts.get(pid, 0) + 1
 
     point_ids = sorted(
         pid for pid, count in point_obs_counts.items()
-        if count >= 2 and 0 <= pid < sfm_map.n_points
+        if count >= 2 and 0 <= pid < landmark_map.n_points
     )
     if not point_ids:
         return {"ran": False, "reason": "no multi-view points in window"}
@@ -82,7 +82,7 @@ def bundle_adjust_local(
 
     observations = []
     for cam in window_cams:
-        frame_obs = sfm_map.get_observations(cam.name)
+        frame_obs = landmark_map.get_observations(cam.name)
         for record in frame_obs.values():
             pid = record["point_idx"]
             if pid not in point_id_to_local:
@@ -98,7 +98,7 @@ def bundle_adjust_local(
         return {"ran": False, "reason": "too few observations"}
 
     x0_cams = np.concatenate([_camera_to_params(cam) for cam in opt_cams], axis=0) if opt_cams else np.empty((0,))
-    x0_points = sfm_map.points3d[point_ids].reshape(-1)
+    x0_points = landmark_map.points3d[point_ids].reshape(-1)
     x0 = np.concatenate([x0_cams, x0_points], axis=0)
 
     n_opt_cams = len(opt_cams)
@@ -154,7 +154,7 @@ def bundle_adjust_local(
             cam.R = R_opt
             cam.t = t_opt
 
-        sfm_map.points3d[point_ids] = pts_block
+        landmark_map.points3d[point_ids] = pts_block
 
     return {
         "ran": True,

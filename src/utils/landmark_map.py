@@ -1,6 +1,9 @@
+import logging
 import numpy as np
 
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -95,9 +98,8 @@ class LandmarkMapping:
         if len(kp_indices) == 0:
             return
 
-        assert len(kp_indices) == len(point_indices) == len(xy_coords), print(
-            "kp_indices, point_indices, and xy_coords must match in length"
-        )
+        if len(kp_indices) != len(point_indices) or len(kp_indices) != len(xy_coords):
+            raise ValueError("kp_indices, point_indices, and xy_coords must match in length")
 
         obs = self.observations.setdefault(frame_name, {})
 
@@ -182,7 +184,9 @@ class LandmarkMapping:
 
         self.observations = remapped_observations
 
-        print(
-            f"[Filter] {before} → {self.n_points} points "
-            f"(removed {before - self.n_points} outliers)"
+        logger.info(
+            "[Filter] %s -> %s points (removed %s outliers)",
+            before,
+            self.n_points,
+            before - self.n_points,
         )

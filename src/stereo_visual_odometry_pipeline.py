@@ -1,22 +1,14 @@
 import cv2
+import logging
 import numpy as np
 from dataclasses import dataclass, field
-from src.datasets.kitti_odometry import KITTIOdometrySequence
 from src.utils.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
 from src.utils.landmark_map import LandmarkMapping
 from typing import Optional
 from ipdb import set_trace
 
+logger = logging.getLogger(__name__)
 
-
-def _sample_colors(image: np.ndarray, pts2d: np.ndarray) -> np.ndarray:
-    """Sample BGR pixel colours at sub-pixel locations."""
-    h, w = image.shape[:2]
-    colors = []
-    for x, y in pts2d:
-        xi, yi = int(np.clip(round(x), 0, w - 1)), int(np.clip(round(y), 0, h - 1))
-        colors.append(image[yi, xi])
-    return np.array(colors, dtype=np.uint8)
 
 
 
@@ -205,7 +197,7 @@ class StereoVisualOdometryPipeline:
                 pnp_curr_kp_indices.append(match.trainIdx)
 
         if len(pts3d_pnp) == 0:
-            print("No valid 3D-2D correspondences for PnP")
+            logger.warning("No valid 3D-2D correspondences for PnP")
             return None, None, None, None, tracked_match_count
 
         return (
@@ -270,10 +262,12 @@ class StereoVisualOdometryPipeline:
             or inliers is None
             or len(inliers) < self.min_points_match_thresh
         ):
-            print("PnP failed: "
-                  f"tracked={tracked_match_count}, "
-                  f"corr={len(pts3d_pnp)}, "
-                  f"inliers={0 if inliers is None else len(inliers)}")
+            logger.warning(
+                "PnP failed: tracked=%s, corr=%s, inliers=%s",
+                tracked_match_count,
+                len(pts3d_pnp),
+                0 if inliers is None else len(inliers),
+            )
             raise ValueError(
                 "PnP RANSAC failed",
             )
@@ -342,7 +336,7 @@ class StereoVisualOdometryPipeline:
 
             self._prev_frame = dict(name=left_frame_name, image=frame_left['image'], kp=left_kp, des=left_des, R=R0, t=t0)
             self._remember_registered_frame(self._prev_frame)
-            print(f"  [Frame at t={t_step}] {left_frame_name}: planted at origin.")
+            logger.info("Frame at t=%s %s: planted at origin", t_step, left_frame_name)
 
             self.map.add_camera(cam)
 
@@ -358,7 +352,7 @@ class StereoVisualOdometryPipeline:
 
             self.map.add_observations(left_frame_name, kp_indices, point_ids, xy_pts)
 
-            print("Done with first stereo frame pair initialization.")
+            logger.info("Done with first stereo frame pair initialization")
             return dict(success=True, reason="origin", n_matches=0, n_new_points=0,
                         R_est=R0, t_est=t0, reproj_error=0.0)
         
@@ -393,7 +387,7 @@ class StereoVisualOdometryPipeline:
         self._prev_frame = dict(name=left_frame_name, image=frame_left['image'], kp=left_kp, des=left_des, R=result['R_est'], t=result['t_est'])
 
         self._remember_registered_frame(self._prev_frame)
-        print(f"  [Frame at t={t_step}] {left_frame_name}")
+        logger.info("Frame at t=%s %s", t_step, left_frame_name)
 
 
         # Add new stereo points in world coordinates. PnP inlier_point_indices

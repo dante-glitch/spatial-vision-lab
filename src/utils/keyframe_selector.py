@@ -28,7 +28,7 @@ class KeyframeSelector:
     """
 
     min_matches     : int   = 80
-    max_match_ratio : float = 0.92
+    max_match_ratio : float = 0.85
     ratio_threshold : float = 0.75
 
     _prev_kp        : list  = field(default_factory=list, init=False, repr=False)

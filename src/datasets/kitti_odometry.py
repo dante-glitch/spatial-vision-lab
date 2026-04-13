@@ -3,8 +3,11 @@ Read KITTI Odometrydataset files and convert them to a format suitable for train
 
 """
 
+import logging
 from pathlib import Path
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def read_calib(calib_path):
@@ -119,8 +122,8 @@ class KITTIOdometrySequence:
                 f"Invalid gray_or_color value: {gray_or_color}. Must be 'gray' or 'color'."
             )
 
-        print(
-            "KITTI Odometry sequence - images are already rectified, so we can directly use the projection matrices for stereo geometry."
+        logger.info(
+            "KITTI Odometry sequence images are already rectified; using projection matrices directly for stereo geometry."
         )
 
         self.cam0 = decompose_stereo_projection(self.left_P)
