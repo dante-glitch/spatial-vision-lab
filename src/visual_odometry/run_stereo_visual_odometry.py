@@ -237,11 +237,11 @@ if __name__ == "__main__":
 
 """
 
-python src/run_stereo_visual_odometry.py \
+python src/visual_odometry/run_stereo_visual_odometry.py \
     --sequence_parent_dir /Volumes/SSD_256/KITTI/VisualOdometry/gray_data/sequences/ \
     --groundtruth_pose_parent_dir /Volumes/SSD_256/KITTI/VisualOdometry/ground_truth_poses/poses/ \
     --sequence_id 02 --gray_or_color gray --max_frames_to_process 600 \
-    --output_dir outputs/kitti_02
+    --output_dir outputs/VO/kitti_02
 
         
         
