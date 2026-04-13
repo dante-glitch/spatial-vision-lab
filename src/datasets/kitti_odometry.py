@@ -4,7 +4,6 @@ Read KITTI Odometrydataset files and convert them to a format suitable for train
 """
 
 from pathlib import Path
-import cv2
 import numpy as np
 
 
@@ -21,6 +20,45 @@ def read_calib(calib_path):
             data = np.array([float(x) for x in value.strip().split()], dtype=np.float64)
             calib[key] = data.reshape(3, 4)
     return calib
+
+
+def read_kitti_odometry_poses(poses_path):
+    """
+    Read KITTI odometry ground-truth poses into a per-frame dictionary.
+
+    r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz
+
+    Each row in a KITTI poses file contains a 3x4 camera pose matrix in
+    row-major order. The returned frame ids match KITTI image filenames:
+    "000000", "000001", ...
+    """
+    poses_path = Path(poses_path)
+    poses = {}
+
+    with open(poses_path, "r") as f:
+        for line_num, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+
+            values = np.array(
+                [float(x) for x in line.strip().split()],
+                dtype=np.float64,
+            )
+
+            if values.size != 12:
+                raise ValueError(
+                    f"Expected 12 pose values in {poses_path} line {line_num}, "
+                    f"got {values.size}."
+                )
+
+            T = values.reshape(3, 4)
+            frame_id = f"{len(poses):06d}"
+            poses[frame_id] = {
+                "R": T[:, :3],
+                "t": T[:, 3].reshape(3, 1),
+            }
+
+    return poses
 
 
 def decompose_stereo_projection(P):
@@ -108,6 +146,8 @@ class KITTIOdometrySequence:
         Returns:
             left_img, right_img, timestamp
         """
+        import cv2
+
         flag = (
             cv2.IMREAD_GRAYSCALE if self.gray_or_color == "gray" else cv2.IMREAD_COLOR
         )

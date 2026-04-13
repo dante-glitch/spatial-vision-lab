@@ -25,8 +25,10 @@ def _sample_colors(image: np.ndarray, pts2d: np.ndarray) -> np.ndarray:
 class Camera:
     name: str
     K: np.ndarray          # 3x3 intrinsic matrix
-    R: np.ndarray          # 3x3 rotation (world-to-cam)
-    t: np.ndarray          # (3,1) translation (world-to-cam)
+    R: np.ndarray          # 3x3 rotation
+    t: np.ndarray          # (3,1) translation
+    R_gt: np.ndarray = None   # 3x3 ground-truth rotation (optional)
+    t_gt: np.ndarray = None   # (3,1) ground-truth translation
 
     @property
     def P(self) -> np.ndarray:
@@ -203,6 +205,7 @@ class StereoVisualOdometryPipeline:
                 pnp_curr_kp_indices.append(match.trainIdx)
 
         if len(pts3d_pnp) == 0:
+            print("No valid 3D-2D correspondences for PnP")
             return None, None, None, None, tracked_match_count
 
         return (
@@ -214,7 +217,7 @@ class StereoVisualOdometryPipeline:
         )
 
 
-    def _register_pnp(self, image, left_frame_name, frame, pts_prev, pts_curr, kp, des, matches, R_prev, t_prev):
+    def _register_pnp(self, image, left_frame_name, frame, pts_prev, pts_curr, kp, des, matches, R_prev, t_prev, gt_pose):
         """
         Find 3D↔2D correspondences by propagating landmark observations
         from the previous registered frame into the current frame.
@@ -242,6 +245,9 @@ class StereoVisualOdometryPipeline:
         
 
         pts3d_pnp, pts2d_pnp, pnp_point_indices, pnp_curr_kp_indices, tracked_match_count = pnp_data
+        if pts3d_pnp is None:
+            raise ValueError("No valid 3D-2D correspondences for PnP", left_frame_name)
+
         if len(pts3d_pnp) < self.min_points_match_thresh:
             raise ValueError(
                 
@@ -281,22 +287,23 @@ class StereoVisualOdometryPipeline:
         inlier_curr_kp_indices = pnp_curr_kp_indices[pnp_inlier_idx]
         inlier_curr_xy = pts2d_pnp[pnp_inlier_idx]
 
-        self.map.add_observations(left_frame_name, inlier_curr_kp_indices, inlier_point_indices, inlier_curr_xy)
+        #self.map.add_observations(left_frame_name, inlier_curr_kp_indices, inlier_point_indices, #inlier_curr_xy)
 
 
-        cam = Camera(name=left_frame_name, K=self.K, R=R_curr, t=t_curr)
+        cam = Camera(name=left_frame_name, K=self.K, R=R_curr, t=t_curr, R_gt=gt_pose["R"],
+                t_gt=gt_pose["t"],)
         self.map.add_camera(cam)
 
         # what to do now?
 
         return dict(success=True, reason="pnp", n_matches=len(matches),
-                    R_est=R_curr, t_est=t_curr)
+                    R_est=R_curr, t_est=t_curr, inlier_point_indices=inlier_point_indices, inlier_curr_kp_indices=inlier_curr_kp_indices, inlier_curr_xy=inlier_curr_xy)
 
 
 
          
 
-    def register_stereo_frame_pair(self, frame_left: dict, frame_right: dict) -> dict:
+    def register_stereo_frame_pair(self, t_step, frame_left: dict, frame_right: dict, gt_pose: dict) -> dict:
 
 
         left_kp, left_des = self.feature_extractor_matcher.extract_features(frame_left['image'])
@@ -316,10 +323,7 @@ class StereoVisualOdometryPipeline:
                 matches=matches_left_right,
                 return_valid_matches=True,
             )
-        pts_curr = np.asarray(
-            [left_kp[m.queryIdx].pt for m in valid_matches_left_right],
-            dtype=np.float32,
-        ).reshape(-1, 2)
+        
         
         left_frame_name = frame_left['name']
         # Special case for the very first frame
@@ -332,11 +336,13 @@ class StereoVisualOdometryPipeline:
                 K=self.K,
                 R=R0,
                 t=t0,
+                R_gt=gt_pose["R"],
+                t_gt=gt_pose["t"],
             )
 
             self._prev_frame = dict(name=left_frame_name, image=frame_left['image'], kp=left_kp, des=left_des, R=R0, t=t0)
             self._remember_registered_frame(self._prev_frame)
-            print(f"  [Frame 0] {left_frame_name}: planted at origin.")
+            print(f"  [Frame at t={t_step}] {left_frame_name}: planted at origin.")
 
             self.map.add_camera(cam)
 
@@ -352,36 +358,72 @@ class StereoVisualOdometryPipeline:
 
             self.map.add_observations(left_frame_name, kp_indices, point_ids, xy_pts)
 
+            print("Done with first stereo frame pair initialization.")
             return dict(success=True, reason="origin", n_matches=0, n_new_points=0,
                         R_est=R0, t_est=t0, reproj_error=0.0)
         
 
         # match current left frame to previous left frame to get candidate correspondences for PnP
-        matches,_ = self.feature_extractor_matcher.match_features(self._prev_frame["des"], left_des, self.ratio_threshold)
+        matches_left_prev_curr,_ = self.feature_extractor_matcher.match_features(self._prev_frame["des"], left_des, self.ratio_threshold)
 
-        pts_prev = np.float32([self._prev_frame["kp"][m.queryIdx].pt for m in matches])
+        pts_prev = np.float32([self._prev_frame["kp"][m.queryIdx].pt for m in matches_left_prev_curr]).reshape(-1, 2)
         
+
+        pts_curr = np.asarray(
+            [left_kp[m.trainIdx].pt for m in matches_left_prev_curr],
+            dtype=np.float32,
+        ).reshape(-1, 2)
 
         R_prev = self._prev_frame["R"]
         t_prev = self._prev_frame["t"]
         
-        result = self._register_pnp(frame_left['image'], left_frame_name, frame_left, pts_prev, pts_curr, left_kp, left_des, matches, R_prev, t_prev)
+        result = self._register_pnp(frame_left['image'], left_frame_name, frame_left, pts_prev, pts_curr, left_kp, left_des, matches_left_prev_curr, R_prev, t_prev, gt_pose)
 
-        
-           
+        inlier_curr_kp_indices = result['inlier_curr_kp_indices']
+        inlier_point_indices = result['inlier_point_indices']
+        inlier_curr_xy = result['inlier_curr_xy']
+
+        self.map.add_observations(
+            left_frame_name,
+            inlier_curr_kp_indices,
+            inlier_point_indices,
+            inlier_curr_xy,
+        )
+
         self._prev_frame = dict(name=left_frame_name, image=frame_left['image'], kp=left_kp, des=left_des, R=result['R_est'], t=result['t_est'])
 
         self._remember_registered_frame(self._prev_frame)
-        print(f"  [Frame 0] {left_frame_name}: planted at origin.")
+        print(f"  [Frame at t={t_step}] {left_frame_name}")
 
 
-        # Add new 3D points
-        point_ids = self.map.add_points(points_3D)
+        # Add new stereo points in world coordinates. PnP inlier_point_indices
+        # are existing map IDs, not indices into points_3D_world.
+        points_3D_world = (result['R_est'].T @ (points_3D.T - result['t_est'])).T #convert points from camera coordinates to world coordinates using the estimated pose of the current frame    
+        observed_curr_kp_indices = set(inlier_curr_kp_indices.tolist())
+        new_stereo_indices = [
+            idx
+            for idx, match in enumerate(valid_matches_left_right)
+            if match.queryIdx not in observed_curr_kp_indices
+        ]
+
+        if not new_stereo_indices:
+            return result
+
+        new_points_3D_world = points_3D_world[new_stereo_indices]
+        point_ids = self.map.add_points(new_points_3D_world)
 
         if len(point_ids) == 0:
-            return 0
+            return result
 
-        kp_indices_stereo = np.array([m.queryIdx for m in valid_matches_left_right], dtype=np.int32)
-        xy_pts = np.float32([left_kp[m.queryIdx].pt for m in valid_matches_left_right])
-
+        kp_indices_stereo = np.array(
+            [valid_matches_left_right[idx].queryIdx for idx in new_stereo_indices],
+            dtype=np.int32,
+        )
+        xy_pts = np.float32(
+            [left_kp[valid_matches_left_right[idx].queryIdx].pt for idx in new_stereo_indices]
+        )
+        # new pixels for which we have new 3D points
         self.map.add_observations(left_frame_name, kp_indices_stereo, point_ids, xy_pts)
+
+        result["n_new_points"] = len(point_ids)
+        return result
