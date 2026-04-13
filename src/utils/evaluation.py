@@ -330,6 +330,176 @@ def _collect_kitti_gt_camera_data(cameras: List[Camera], ground_truth_poses: dic
     )
 
 
+def _camera_to_c2w_matrix(camera: Camera) -> np.ndarray:
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = camera.R.T
+    T[:3, 3] = camera.center
+    return T
+
+
+def _kitti_pose_to_matrix(pose: dict) -> np.ndarray:
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = np.asarray(pose["R"], dtype=np.float64).reshape(3, 3)
+    T[:3, 3] = np.asarray(pose["t"], dtype=np.float64).reshape(3)
+    return T
+
+
+def _collect_kitti_pose_matrices(cameras: List[Camera], ground_truth_poses: dict):
+    records = []
+    for camera in cameras:
+        frame_id = Path(camera.name).stem
+        gt_pose = ground_truth_poses.get(frame_id)
+        if gt_pose is None:
+            continue
+
+        records.append(
+            {
+                "frame_id": frame_id,
+                "frame_number": int(frame_id),
+                "T_est_c2w": _camera_to_c2w_matrix(camera),
+                "T_gt_c2w": _kitti_pose_to_matrix(gt_pose),
+            }
+        )
+
+    records.sort(key=lambda record: record["frame_number"])
+    return records
+
+
+def _trajectory_distances(poses_c2w: list[np.ndarray]) -> np.ndarray:
+    distances = np.zeros(len(poses_c2w), dtype=np.float64)
+    for idx in range(1, len(poses_c2w)):
+        prev_t = poses_c2w[idx - 1][:3, 3]
+        curr_t = poses_c2w[idx][:3, 3]
+        distances[idx] = distances[idx - 1] + np.linalg.norm(curr_t - prev_t)
+    return distances
+
+
+def _last_frame_from_segment_length(distances: np.ndarray, first_idx: int, length: float):
+    target_distance = distances[first_idx] + length
+    for idx in range(first_idx, len(distances)):
+        if distances[idx] >= target_distance:
+            return idx
+    return None
+
+
+def _rotation_error_rad(T_error: np.ndarray) -> float:
+    R = T_error[:3, :3]
+    cos_angle = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    return float(np.arccos(cos_angle))
+
+
+def _translation_error(T_error: np.ndarray) -> float:
+    return float(np.linalg.norm(T_error[:3, 3]))
+
+
+def kitti_odometry_subsequence_metrics(
+    cameras: List[Camera],
+    ground_truth_poses: dict,
+    lengths: tuple[int, ...] = (100, 200, 300, 400, 500, 600, 700, 800),
+    step_size: int = 10,
+) -> Optional[dict]:
+    """
+    Compute the KITTI odometry subsequence relative pose error metric.
+
+    Translation is reported as percent drift. Rotation is reported in
+    degrees per 100 meters. The metric is computed over registered frames;
+    if keyframe selection skips frames, the reported segment count may be
+    lower than a dense KITTI submission.
+    """
+    records = _collect_kitti_pose_matrices(cameras, ground_truth_poses)
+    if len(records) < 2:
+        return None
+
+    gt_poses = [record["T_gt_c2w"] for record in records]
+    est_poses = [record["T_est_c2w"] for record in records]
+    distances = _trajectory_distances(gt_poses)
+
+    segment_errors = []
+    for first_idx in range(0, len(records), step_size):
+        for length in lengths:
+            last_idx = _last_frame_from_segment_length(distances, first_idx, length)
+            if last_idx is None:
+                continue
+
+            T_gt_delta = np.linalg.inv(gt_poses[first_idx]) @ gt_poses[last_idx]
+            T_est_delta = np.linalg.inv(est_poses[first_idx]) @ est_poses[last_idx]
+            T_error = np.linalg.inv(T_est_delta) @ T_gt_delta
+
+            t_err = _translation_error(T_error) / length
+            r_err = _rotation_error_rad(T_error) / length
+
+            segment_errors.append(
+                {
+                    "first_frame": records[first_idx]["frame_id"],
+                    "last_frame": records[last_idx]["frame_id"],
+                    "length_m": float(length),
+                    "translation_error": float(t_err),
+                    "translation_error_percent": float(t_err * 100.0),
+                    "rotation_error_rad_per_m": float(r_err),
+                    "rotation_error_deg_per_100m": float(np.degrees(r_err) * 100.0),
+                    "num_registered_frames": int(last_idx - first_idx + 1),
+                }
+            )
+
+    if not segment_errors:
+        return {
+            "n_frames": len(records),
+            "lengths_m": list(lengths),
+            "step_size": step_size,
+            "n_segments": 0,
+            "summary": None,
+            "by_length": {},
+            "segments": [],
+        }
+
+    t_percent = np.asarray(
+        [error["translation_error_percent"] for error in segment_errors],
+        dtype=np.float64,
+    )
+    r_deg_100m = np.asarray(
+        [error["rotation_error_deg_per_100m"] for error in segment_errors],
+        dtype=np.float64,
+    )
+
+    by_length = {}
+    for length in lengths:
+        length_errors = [
+            error for error in segment_errors
+            if np.isclose(error["length_m"], float(length))
+        ]
+        if not length_errors:
+            continue
+
+        length_t = np.asarray(
+            [error["translation_error_percent"] for error in length_errors],
+            dtype=np.float64,
+        )
+        length_r = np.asarray(
+            [error["rotation_error_deg_per_100m"] for error in length_errors],
+            dtype=np.float64,
+        )
+        by_length[str(length)] = {
+            "n_segments": len(length_errors),
+            "translation_error_percent_mean": float(np.mean(length_t)),
+            "rotation_error_deg_per_100m_mean": float(np.mean(length_r)),
+        }
+
+    return {
+        "n_frames": len(records),
+        "lengths_m": list(lengths),
+        "step_size": step_size,
+        "n_segments": len(segment_errors),
+        "summary": {
+            "translation_error_percent_mean": float(np.mean(t_percent)),
+            "translation_error_percent_median": float(np.median(t_percent)),
+            "rotation_error_deg_per_100m_mean": float(np.mean(r_deg_100m)),
+            "rotation_error_deg_per_100m_median": float(np.median(r_deg_100m)),
+        },
+        "by_length": by_length,
+        "segments": segment_errors,
+    }
+
+
 def aligned_pose_metrics(
     cameras     : List[Camera],
     with_scale  : bool = True,
@@ -474,10 +644,11 @@ def evaluate(
     ground_truth_poses: Optional[dict] = None,
 ) -> dict:
     """
-    Run all metrics and print a summary table.
+    Run all metrics and log a summary table.
 
     Returns dict with keys:
-        rot_errors_aligned, position_errors_aligned, ate_rmse, alignment_scale
+        rot_errors_aligned, position_errors_aligned, ate_rmse,
+        alignment_scale, kitti_subsequence
     """
     pose_metrics = aligned_pose_metrics(
         landmark_map.cameras,
@@ -488,6 +659,12 @@ def evaluate(
     n_gt_cameras = (
         0 if pose_metrics is None else len(pose_metrics["position_errors_aligned"])
     )
+    kitti_metrics = None
+    if ground_truth_poses is not None:
+        kitti_metrics = kitti_odometry_subsequence_metrics(
+            landmark_map.cameras,
+            ground_truth_poses,
+        )
 
     logger.info("%s", "=" * 60)
     logger.info("EVALUATION REPORT")
@@ -523,14 +700,31 @@ def evaluate(
     else:
         logger.info("Aligned pose metrics     : N/A (< 3 GT cameras)")
 
+    if kitti_metrics is not None:
+        logger.info("KITTI odometry subsequence metric")
+        logger.info("  segments: %s", kitti_metrics["n_segments"])
+        if kitti_metrics["summary"] is not None:
+            summary = kitti_metrics["summary"]
+            logger.info(
+                "  t_err  : %.3f %%", summary["translation_error_percent_mean"]
+            )
+            logger.info(
+                "  r_err  : %.3f deg / 100m",
+                summary["rotation_error_deg_per_100m_mean"],
+            )
+        else:
+            logger.info("  N/A: no 100m-800m subsequences found")
+
     logger.info("%s", "=" * 60)
 
-    return pose_metrics or dict(
+    metrics = pose_metrics or dict(
         rot_errors_aligned=[],
         position_errors_aligned=[],
         ate_rmse=None,
         alignment_scale=None,
     )
+    metrics["kitti_subsequence"] = kitti_metrics
+    return metrics
 
 
 def _make_polyline(points: np.ndarray, color: tuple[float, float, float]):

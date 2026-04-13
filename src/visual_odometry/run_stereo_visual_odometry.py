@@ -1,7 +1,7 @@
 from src.utils.landmark_map import LandmarkMapping
 from src.utils.keyframe_selector import KeyframeSelector
 from src.datasets.kitti_odometry import KITTIOdometrySequence, read_kitti_odometry_poses
-from src.stereo_visual_odometry_pipeline import StereoVisualOdometryPipeline
+from src.visual_odometry.stereo_visual_odometry_pipeline import StereoVisualOdometryPipeline
 from src.utils.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
 from src.utils.evaluation import visualize_trajectories, evaluate
 from src.utils.bundle_adjustment import bundle_adjust_local
@@ -240,8 +240,8 @@ if __name__ == "__main__":
 python src/run_stereo_visual_odometry.py \
     --sequence_parent_dir /Volumes/SSD_256/KITTI/VisualOdometry/gray_data/sequences/ \
     --groundtruth_pose_parent_dir /Volumes/SSD_256/KITTI/VisualOdometry/ground_truth_poses/poses/ \
-    --sequence_id 01 --gray_or_color gray --max_frames_to_process 500 \
-    --output_dir outputs/kitti_01
+    --sequence_id 02 --gray_or_color gray --max_frames_to_process 600 \
+    --output_dir outputs/kitti_02
 
         
         
