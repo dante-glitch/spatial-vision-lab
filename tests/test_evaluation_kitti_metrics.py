@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from src.utils.evaluation import kitti_odometry_subsequence_metrics
-from src.utils.landmark_map import Camera
+from src.modules.evaluation import kitti_odometry_subsequence_metrics
+from src.modules.landmark_map import Camera
 
 
 def _camera_from_c2w(name, R_c2w, t_c2w):

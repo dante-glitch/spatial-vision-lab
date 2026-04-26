@@ -105,8 +105,8 @@ class LandmarkMapping:
 
         for kp_idx, point_idx, xy in zip(kp_indices, point_indices, xy_coords):
             obs[int(kp_idx)] = {
-                "point_idx": int(point_idx),
-                "xy": xy.astype(np.float32),
+                "point_idx": int(point_idx), # index of the 3D point in self.points3d
+                "xy": xy.astype(np.float32), # 2D coordinates of the keypoint in the image
             }
 
     def get_observations(self, frame_name: str) -> dict:

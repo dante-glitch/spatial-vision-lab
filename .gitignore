@@ -213,6 +213,7 @@ __marimo__/
 # temporary directories
 tmp/
 temp/
+outputs/
 
 # Open3D viewer render-option exports
 RenderOption_*.json

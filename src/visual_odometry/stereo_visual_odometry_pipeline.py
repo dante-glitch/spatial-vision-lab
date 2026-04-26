@@ -2,8 +2,8 @@ import cv2
 import logging
 import numpy as np
 from dataclasses import dataclass, field
-from src.utils.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
-from src.utils.landmark_map import LandmarkMapping
+from src.modules.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
+from src.modules.landmark_map import LandmarkMapping
 from typing import Optional
 from ipdb import set_trace
 
@@ -79,7 +79,7 @@ def compte_depths_3D_points_ref_camera(
         if not np.isfinite(disparity) or disparity <= 0:
             continue
 
-        uL, vL = kp.pt
+        uL, vL = kp.pt # 2D pixel coordinates in the left image
 
         Z = (fx * baseline) / disparity
         X = (uL - cx) * Z / fx
@@ -207,6 +207,9 @@ class StereoVisualOdometryPipeline:
             np.asarray(pnp_curr_kp_indices, dtype=np.int32),
             tracked_match_count,
         )
+    
+    def get_last_registered_frame(self) -> dict:
+        return self._prev_frame
 
 
     def _register_pnp(self, image, left_frame_name, frame, pts_prev, pts_curr, kp, des, matches, R_prev, t_prev, gt_pose):

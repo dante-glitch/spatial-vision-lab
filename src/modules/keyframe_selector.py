@@ -11,7 +11,7 @@ previous keyframe left image.
 
 
 from dataclasses import dataclass, field
-from src.utils.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
+from src.modules.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
 
 @dataclass
 class KeyframeSelector:

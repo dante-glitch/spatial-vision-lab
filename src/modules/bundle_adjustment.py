@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
-from src.utils.landmark_map import LandmarkMapping
+from src.modules.landmark_map import LandmarkMapping
 
 
 def _camera_to_params(cam):
