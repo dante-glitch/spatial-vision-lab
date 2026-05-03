@@ -12,6 +12,14 @@ from src.modules.vlad_encoder import VLADEncoder
 from src.modules.loop_detector import LoopDetector
 from src.modules.keyframe_database import KeyframeDatabase, KeyFrameRecord
 
+from src.modules.pose_graph_optimization import (
+    PoseGraphEdge,
+    apply_optimized_poses,
+    camera_to_world_T,
+    optimize_pose_graph,
+    relative_T,
+)
+
 import cv2
 import argparse
 import json
@@ -67,6 +75,10 @@ def main(
     keyframe_max_match_ratio: float = 0.92,
     ratio_threshold: float = 0.75,
     max_frames_to_process: int = 500,
+    loop_checking_frequency: int = 10,
+    loop_min_temporal_separation: int = 40,
+    loop_pnp_min_correspondences: int = 6,
+    loop_pnp_min_inliers: int = 10,
 ):  
     output_dir = Path(output_dir)
     log_path = configure_logging(output_dir)
@@ -117,7 +129,7 @@ def main(
 
     loop_detector = LoopDetector(
         vlad_encoder=vlad_encoder,
-        min_temporal_seperation=40, #TODO tune this
+        min_temporal_seperation=loop_min_temporal_separation,
         top_k=5, #TODO parameterize this
         min_score=0.25, #TODO parameterize this
     )
@@ -126,7 +138,8 @@ def main(
 
     feature_extractor_matcher =KeypointFeatureExtractorAndMatcher()
 
-
+    count = 0
+    loop_edges = []
     for i in range(0, len(kitti_seq)):
 
         left, right, t_step = kitti_seq.get_frame(i)
@@ -137,6 +150,9 @@ def main(
 
 
         accepted, _, _, reason = keyframe_selector.should_add(left)
+
+        if accepted:
+            count+=1
 
         if accepted:
             logger.info("Frame %s accepted as keyframe: %s", i, reason)
@@ -156,51 +172,89 @@ def main(
         current_R = current["R"]
         current_t = current["t"]
 
-        # 1. Loop retrieval
-        loop_candidates = loop_detector.query(frame_index=i, descriptors=des)
+        if count % loop_checking_frequency == 0:
+            # Loop retrieval
+            loop_candidates = loop_detector.query(frame_index=i, descriptors=des)
 
-        for candidate in loop_candidates:
-            old_kf = keyframe_db.get(candidate.frame_name)
+            # Loop Closure Detection and Geometric Verification
+            for candidate in loop_candidates:
+                old_kf = keyframe_db.get(candidate.frame_name)
 
-            logger.info("Loop candidate current=%s old=%s score=%.3f", frame_name, candidate.frame_name, candidate.score)
-            
-            # geometric verification goes here
-            # use old_kf.descriptors + old_kf.kp_to_landmark + landmark_tracker.points3d
-            # to build 3D-2D correspondences into the current frame
+                logger.info("Loop candidate current=%s old=%s score=%.3f", frame_name, candidate.frame_name, candidate.score)
+                
+                # geometric verification goes here
+                # use old_kf.descriptors + old_kf.kp_to_landmark + landmark_tracker.points3d
+                # to build 3D-2D correspondences into the current frame
 
-            matches_loop, _ = feature_extractor_matcher.match_features(
-                old_kf.descriptors.astype(np.float32),
-                des,
-                ratio_threshold=ratio_threshold,
-            )
-            
-            pts_3d = []
-            pts_2d = []
-
-            for m in matches_loop:
-                landmark_id = old_kf.kp_to_landmark.get(int(m.queryIdx), None)
-                if landmark_id is None:
-                    continue
-                if landmark_id >= landmark_tracker.n_points:
-                    continue
-
-                pts_3d.append(landmark_tracker.points3d[landmark_id])
-                pts_2d.append(kp[m.trainIdx].pt)
-            
-            pts3d = np.asarray(pts_3d, dtype=np.float64)
-            pts2d = np.asarray(pts_2d, dtype=np.float32)
-
-            if len(pts3d) >= 6: #TODO make this configurable
-                success, rvec, tvec, inliers = cv2.solvePnPRansac(
-                    pts3d,
-                    pts2d,
-                    kitti_seq.cam0["K"],
-                    None,
-                    iterationsCount=1000,
-                    reprojectionError=3.0,
-                    confidence=0.999,
-                    flags=cv2.SOLVEPNP_ITERATIVE,
+                matches_loop, _ = feature_extractor_matcher.match_features(
+                    old_kf.descriptors.astype(np.float32),
+                    des,
+                    ratio_threshold=ratio_threshold,
                 )
+                
+                pts_3d = []
+                pts_2d = []
+
+                for m in matches_loop:
+                    landmark_id = old_kf.kp_to_landmark.get(int(m.queryIdx), None)
+                    if landmark_id is None:
+                        continue
+                    if landmark_id >= landmark_tracker.n_points:
+                        continue
+
+                    pts_3d.append(landmark_tracker.points3d[landmark_id])
+                    pts_2d.append(kp[m.trainIdx].pt)
+                
+                pts3d = np.asarray(pts_3d, dtype=np.float64)
+                pts2d = np.asarray(pts_2d, dtype=np.float32)
+
+                # Relative Pose Verification with PnP RANSAC
+                if len(pts3d) >= loop_pnp_min_correspondences:
+                    
+                    success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                        pts3d,
+                        pts2d,
+                        kitti_seq.cam0["K"],
+                        None,
+                        iterationsCount=1000,
+                        reprojectionError=3.0,
+                        confidence=0.999,
+                        flags=cv2.SOLVEPNP_ITERATIVE,
+                    )
+
+                    logger.info("Performing loop PnP RANSAC with %s 3D-2D correspondences", len(pts3d))
+                    logger.info("Loop PnP RANSAC success=%s inliers=%s", success, len(inliers) if inliers is not None else 0)
+
+                    loop_accepted = (
+                        success
+                        and inliers is not None
+                        and len(inliers) >= loop_pnp_min_inliers
+                    )
+
+                    if loop_accepted:
+                        logger.info(
+                            "Loop accepted current=%s old=%s score=%.3f inliers=%s",
+                            frame_name,
+                            candidate.frame_name,
+                            candidate.score,
+                            len(inliers),
+                        )
+
+                        R_loop, _ = cv2.Rodrigues(rvec)
+                        T_old_world = camera_to_world_T(old_kf.R, old_kf.t)
+                        T_current_loop_world = camera_to_world_T(R_loop, tvec)
+
+                        loop_edges.append(
+                            PoseGraphEdge(
+                                source=old_kf.name,
+                                target=frame_name,
+                                relative_T=relative_T(T_old_world, T_current_loop_world),
+                                weight=float(len(inliers)),
+                                edge_type="loop",
+                            )
+                        )
+
+
 
 
         # adding new frame to database and loop detector
@@ -228,7 +282,6 @@ def main(
             descriptors=des,
         )
 
-
         if i > 0 and i % 20 == 0:
             logger.info("Performing local bundle adjustment at frame %s", i)
             ba_stats = bundle_adjust_local(
@@ -253,6 +306,18 @@ def main(
 
     # Final filtering
     landmark_tracker.filter_outlier_points()
+
+    if loop_edges:
+        logger.info("Optimizing pose graph with %s loop edges and %s odometry edges", len(loop_edges), count - 1)
+        optimized_poses, pgo_stats = optimize_pose_graph(
+            keyframes=keyframe_db.records,
+            loop_edges=loop_edges,
+        )
+
+        apply_optimized_poses(keyframe_db, landmark_tracker, optimized_poses)
+        logger.info("Pose graph optimization stats: %s", pgo_stats)
+    else:
+        logger.info("Skipping pose graph optimization: no accepted loop edges")
 
 
     # ---- Evaluation ------------------------------------------------------
@@ -336,6 +401,31 @@ if __name__ == "__main__":
         help="Path to the pretrained VLAD cluster centers (.npy).",
     )
 
+    parser.add_argument(
+        "--loop_checking_frequency",
+        type=int,
+        default=4,
+        help="How often should we check for loops?",
+    )
+    parser.add_argument(
+        "--loop_min_temporal_separation",
+        type=int,
+        default=40,
+        help="Minimum frame-index distance between loop candidates and the current frame.",
+    )
+    parser.add_argument(
+        "--loop_pnp_min_correspondences",
+        type=int,
+        default=6,
+        help="Minimum 3D-2D correspondences required before loop PnP RANSAC.",
+    )
+    parser.add_argument(
+        "--loop_pnp_min_inliers",
+        type=int,
+        default=50,
+        help="Minimum PnP RANSAC inliers required to accept a loop.",
+    )
+
     args = parser.parse_args()
 
     main(
@@ -345,6 +435,10 @@ if __name__ == "__main__":
         gray_or_color=args.gray_or_color,
         output_dir=args.output_dir,
         vlad_cluster_centers_path=args.vlad_cluster_centers_path,
+        loop_checking_frequency=args.loop_checking_frequency,
+        loop_min_temporal_separation=args.loop_min_temporal_separation,
+        loop_pnp_min_correspondences=args.loop_pnp_min_correspondences,
+        loop_pnp_min_inliers=args.loop_pnp_min_inliers,
         max_frames_to_process=args.max_frames_to_process,
     )
 
@@ -353,8 +447,8 @@ if __name__ == "__main__":
 python src/visual_odometry/run_stereo_visual_odometry.py \
     --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
     --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
-    --sequence_id 06 --gray_or_color gray --max_frames_to_process 600 \
-    --output_dir outputs/VO/kitti_06 \
+    --sequence_id 06 --gray_or_color gray --max_frames_to_process 950 \
+    --output_dir outputs/VO/kitti_06_pgo \
     --vlad_cluster_centers_path outputs/vlad_train/seq_07/vlad_cluster_centers.npy
 
         
