@@ -360,21 +360,27 @@ class StereoVisualOdometryPipeline:
                         R_est=R0, t_est=t0, reproj_error=0.0)
         
 
-        # match current left frame to previous left frame to get candidate correspondences for PnP
-        matches_left_prev_curr,_ = self.feature_extractor_matcher.match_features(self._prev_frame["des"], left_des, self.ratio_threshold)
-
-        pts_prev = np.float32([self._prev_frame["kp"][m.queryIdx].pt for m in matches_left_prev_curr]).reshape(-1, 2)
-        
-
-        pts_curr = np.asarray(
-            [left_kp[m.trainIdx].pt for m in matches_left_prev_curr],
-            dtype=np.float32,
-        ).reshape(-1, 2)
-
         R_prev = self._prev_frame["R"]
         t_prev = self._prev_frame["t"]
         
-        result = self._register_pnp(frame_left['image'], left_frame_name, frame_left, pts_prev, pts_curr, left_kp, left_des, matches_left_prev_curr, R_prev, t_prev, gt_pose)
+        try:
+            result = self._register_pnp(
+                frame_left["image"],
+                left_frame_name,
+                frame_left,
+                left_kp,
+                left_des,
+                R_prev,
+                t_prev,
+                gt_pose,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "Skipping frame %s due to PnP failure: %s",
+                left_frame_name,
+                exc,
+            )
+            return {"success": False, "reason": "pnp_failure"}
 
         inlier_curr_kp_indices = result['inlier_curr_kp_indices']
         inlier_point_indices = result['inlier_point_indices']

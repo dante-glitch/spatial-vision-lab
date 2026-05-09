@@ -3,7 +3,7 @@ from src.modules.keyframe_selector import KeyframeSelector
 from src.datasets.kitti_odometry import KITTIOdometrySequence, read_kitti_odometry_poses
 from src.visual_odometry.stereo_visual_odometry_pipeline import StereoVisualOdometryPipeline
 
-from src.modules.bundle_adjustment import bundle_adjust_local
+from src.modules.bundle_adjustment import bundle_adjust_local, bundle_adjust_global
 from src.modules.evaluation import visualize_trajectories, evaluate
 from src.modules.save_trajectory import save_registered_kitti_trajectories
 
@@ -316,9 +316,19 @@ def main(
 
         apply_optimized_poses(keyframe_db, landmark_tracker, optimized_poses)
         logger.info("Pose graph optimization stats: %s", pgo_stats)
+
     else:
         logger.info("Skipping pose graph optimization: no accepted loop edges")
 
+    # Final global BA after all frames processed
+    logger.info("Running final global bundle adjustment after frame processing")
+    final_global_ba_stats = bundle_adjust_global(
+        landmark_map=landmark_tracker,
+        fixed_cameras=1,
+        max_nfev=120,
+        max_points=500,
+    )
+    logger.info("Final global bundle adjustment stats: %s", final_global_ba_stats)
 
     # ---- Evaluation ------------------------------------------------------
     logger.info(f"Running Evaluation on {len(landmark_tracker.cameras)} registered frames...")
@@ -448,7 +458,7 @@ python src/visual_odometry/run_stereo_visual_odometry.py \
     --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
     --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
     --sequence_id 06 --gray_or_color gray --max_frames_to_process 950 \
-    --output_dir outputs/VO/kitti_06_pgo \
+    --output_dir outputs/VO/kitti_06_pgo_globalBA \
     --vlad_cluster_centers_path outputs/vlad_train/seq_07/vlad_cluster_centers.npy
 
         
