@@ -1,7 +1,7 @@
 from src.modules.landmark_map import LandmarkMapping
 from src.modules.keyframe_selector import KeyframeSelector
 from src.datasets.kitti_odometry import KITTIOdometrySequence, read_kitti_odometry_poses
-from src.visual_odometry.stereo_visual_odometry_pipeline import StereoVisualOdometryPipeline
+from src.visual_slam.stereo_slam_pipeline import StereoVisualOdometryPipeline
 
 from src.modules.bundle_adjustment import bundle_adjust_local, bundle_adjust_global
 from src.modules.evaluation import visualize_trajectories, evaluate
@@ -72,7 +72,7 @@ def main(
     output_dir,
     vlad_cluster_centers_path,
     min_matches: int = 80,
-    keyframe_max_match_ratio: float = 0.92,
+    keyframe_max_match_ratio: float = 0.85,
     ratio_threshold: float = 0.75,
     max_frames_to_process: int = 500,
     loop_checking_frequency: int = 10,
@@ -325,8 +325,8 @@ def main(
     final_global_ba_stats = bundle_adjust_global(
         landmark_map=landmark_tracker,
         fixed_cameras=1,
-        max_nfev=120,
-        max_points=500,
+        max_nfev=100,
+        max_points=300,
     )
     logger.info("Final global bundle adjustment stats: %s", final_global_ba_stats)
 
@@ -393,6 +393,12 @@ if __name__ == "__main__":
         help="Whether to use grayscale or color images for disparity computation.",
     )
     parser.add_argument(
+        "--keyframe_max_match_ratio",
+        type=float,
+        default=0.85,
+        help="Maximum match ratio for keyframe acceptance; lower means fewer, more distinct keyframes.",
+    )
+    parser.add_argument(
         "--max_frames_to_process",
         type=int,
         default=200,
@@ -449,12 +455,13 @@ if __name__ == "__main__":
         loop_min_temporal_separation=args.loop_min_temporal_separation,
         loop_pnp_min_correspondences=args.loop_pnp_min_correspondences,
         loop_pnp_min_inliers=args.loop_pnp_min_inliers,
+        keyframe_max_match_ratio=args.keyframe_max_match_ratio,
         max_frames_to_process=args.max_frames_to_process,
     )
 
 """
 
-python src/visual_odometry/run_stereo_visual_odometry.py \
+python src/visual_slam/run_stereo_slam.py \
     --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
     --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
     --sequence_id 06 --gray_or_color gray --max_frames_to_process 950 \

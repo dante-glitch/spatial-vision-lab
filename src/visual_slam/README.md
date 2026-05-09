@@ -40,7 +40,7 @@ data, the dataset loader uses the corresponding color projection matrices.
 From the repository root:
 
 ```bash
-python src/visual_slam/run_stereo_visual_odometry.py \
+python src/classical_visual_slam/visual_slam/run_stereo_visual_odometry.py \
   --sequence_parent_dir /Volumes/SSD_256/KITTI/VisualOdometry/gray_data/sequences/ \
   --groundtruth_pose_parent_dir /Volumes/SSD_256/KITTI/VisualOdometry/ground_truth_poses/poses/ \
   --sequence_id 06 \
@@ -153,6 +153,15 @@ This stereo SLAM system uses a hybrid optimization approach:
 - Global BA is expensive; cap the number of points (`max_points=500`) to speed up final refinement.
 - VLAD clustering is precomputed offline; see `src/tools/train_vlad.py` for training instructions.
 
+## Limitations
+
+This implementation is a research/demo stereo SLAM pipeline, not a fully deployed backend system.
+
+- Local bundle adjustment, global bundle adjustment, and loop closure are run as part of the batch pipeline, not as an asynchronous backend service.
+- The system is designed for offline sequence processing and evaluation on KITTI-style data, not for continuous live deployment on embedded hardware.
+- Loop closure uses offline VLAD encoding and geometric PnP verification in the main loop rather than a separate backend module.
+- Final global bundle adjustment is executed at the end of sequence processing, so it is not part of a real-time backend pose-correction pipeline.
+- There is no separate backend process for long-term map management, relocalization, or distributed data streaming.
 
 - The estimated poses stored by the pipeline are world-to-camera poses. The saved
   KITTI trajectory converts them to camera-to-world form.
