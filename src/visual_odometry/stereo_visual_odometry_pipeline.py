@@ -212,7 +212,7 @@ class StereoVisualOdometryPipeline:
         return self._prev_frame
 
 
-    def _register_pnp(self, image, left_frame_name, frame, pts_prev, pts_curr, kp, des, matches, R_prev, t_prev, gt_pose):
+    def _register_pnp(self, image, left_frame_name, frame, kp, des, R_prev, t_prev, gt_pose):
         """
         Find 3D↔2D correspondences by propagating landmark observations
         from the previous registered frame into the current frame.
@@ -293,7 +293,7 @@ class StereoVisualOdometryPipeline:
 
         # what to do now?
 
-        return dict(success=True, reason="pnp", n_matches=len(matches),
+        return dict(success=True, reason="pnp", n_matches=len(pts3d_pnp),
                     R_est=R_curr, t_est=t_curr, inlier_point_indices=inlier_point_indices, inlier_curr_kp_indices=inlier_curr_kp_indices, inlier_curr_xy=inlier_curr_xy)
 
 

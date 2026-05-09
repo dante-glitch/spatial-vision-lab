@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from scipy.optimize import least_squares
+from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation
 
 @dataclass
@@ -118,7 +119,23 @@ def optimize_pose_graph(
         return initial_poses, {"success": True, "reason": "no_edges", "n_edges": 0}
     
     variable_names = names[1:]
+    variable_name_to_offset = {name: idx for idx, name in enumerate(variable_names)}
     x0 = np.concatenate([transform_to_vec(initial_poses[name]) for name in variable_names])
+
+    # Each edge residual only depends on its source and target poses, so give
+    # least_squares the sparsity pattern to avoid dense finite-difference work.
+    jac_sparsity = lil_matrix((len(edges) * 6, len(variable_names) * 6), dtype=np.int8)
+    for edge_idx, edge in enumerate(edges):
+        row_start = edge_idx * 6
+        for name in (edge.source, edge.target):
+            col_offset = variable_name_to_offset.get(name)
+            if col_offset is None:
+                continue
+            jac_sparsity[
+                row_start:row_start + 6,
+                col_offset * 6:(col_offset + 1) * 6,
+            ] = 1
+    jac_sparsity = jac_sparsity.tocsr()
 
     
     def unpack(x):
@@ -143,6 +160,7 @@ def optimize_pose_graph(
     result = least_squares(
         residuals,
         x0,
+        jac_sparsity=jac_sparsity,
         loss="huber",
         f_scale=1.0,
         max_nfev=max_nfev,
@@ -189,8 +207,6 @@ def apply_optimized_poses(keyframe_db, landmark_map, optimized_camera_to_world: 
 
 
     
-
-
 
 
 
