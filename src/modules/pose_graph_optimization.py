@@ -87,7 +87,7 @@ def optimize_pose_graph(
         keyframes,
         loop_edges: list[PoseGraphEdge],
         odom_weight: float = 1.0,
-        loop_weight: float = 3.0,
+        loop_weight: float = 1.0,
         max_nfev: int = 100, 
 ):
     keyframes = sorted(keyframes, key=lambda rec:rec. frame_index)
@@ -207,6 +207,5 @@ def apply_optimized_poses(keyframe_db, landmark_map, optimized_camera_to_world: 
 
 
     
-
 
 

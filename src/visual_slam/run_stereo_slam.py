@@ -64,6 +64,28 @@ def _json_safe(value):
     return value
 
 
+def _relative_pose_disagreement(measured_relative_T: np.ndarray, expected_relative_T: np.ndarray):
+    error_T = np.linalg.inv(measured_relative_T) @ expected_relative_T
+    R_err = error_T[:3, :3]
+    cos_angle = np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
+    rotation_deg = float(np.degrees(np.arccos(cos_angle)))
+    translation = float(np.linalg.norm(error_T[:3, 3]))
+    return rotation_deg, translation
+
+
+def _log_evaluation_summary(label: str, metrics: dict):
+    kitti = metrics.get("kitti_subsequence") or {}
+    kitti_summary = kitti.get("summary") or {}
+    logger.info(
+        "%s summary: ATE_RMSE=%s, scale=%s, KITTI_t_err_pct=%s, KITTI_r_err_deg_per_100m=%s",
+        label,
+        metrics.get("ate_rmse"),
+        metrics.get("alignment_scale"),
+        kitti_summary.get("translation_error_percent_mean"),
+        kitti_summary.get("rotation_error_deg_per_100m_mean"),
+    )
+
+
 def main(
     sequence_parent_dir,
     groundtruth_pose_dir,
@@ -79,6 +101,12 @@ def main(
     loop_min_temporal_separation: int = 40,
     loop_pnp_min_correspondences: int = 6,
     loop_pnp_min_inliers: int = 10,
+    enable_pgo: bool = False,
+    loop_max_relative_rotation_deg: float = 15.0,
+    loop_max_relative_translation: float = 10.0,
+    enable_global_ba: bool = False,
+    global_ba_max_nfev: int = 100,
+    global_ba_max_points: int = 300,
 ):  
     output_dir = Path(output_dir)
     log_path = configure_logging(output_dir)
@@ -140,7 +168,7 @@ def main(
 
     count = 0
     loop_edges = []
-    for i in range(0, len(kitti_seq)):
+    for i in range(0, max_frames_to_process):
 
         left, right, t_step = kitti_seq.get_frame(i)
 
@@ -243,12 +271,33 @@ def main(
                         R_loop, _ = cv2.Rodrigues(rvec)
                         T_old_world = camera_to_world_T(old_kf.R, old_kf.t)
                         T_current_loop_world = camera_to_world_T(R_loop, tvec)
+                        T_current_odom_world = camera_to_world_T(current_R, current_t)
+
+                        loop_relative_T = relative_T(T_old_world, T_current_loop_world)
+                        odom_relative_T = relative_T(T_old_world, T_current_odom_world)
+                        relative_rotation_deg, relative_translation = _relative_pose_disagreement(
+                            measured_relative_T=loop_relative_T,
+                            expected_relative_T=odom_relative_T,
+                        )
+
+                        if (
+                            relative_rotation_deg > loop_max_relative_rotation_deg
+                            or relative_translation > loop_max_relative_translation
+                        ):
+                            logger.info(
+                                "Loop rejected by sanity check current=%s old=%s rot_diff=%.3f deg trans_diff=%.3f",
+                                frame_name,
+                                candidate.frame_name,
+                                relative_rotation_deg,
+                                relative_translation,
+                            )
+                            continue
 
                         loop_edges.append(
                             PoseGraphEdge(
                                 source=old_kf.name,
                                 target=frame_name,
-                                relative_T=relative_T(T_old_world, T_current_loop_world),
+                                relative_T=loop_relative_T,
                                 weight=float(len(inliers)),
                                 edge_type="loop",
                             )
@@ -297,18 +346,18 @@ def main(
             logger.info("Frame %s: filtering outliers from landmark map", i)
             landmark_tracker.filter_outlier_points()
 
-        if i == max_frames_to_process-1:
-            logger.info(
-                "Reached max_frames_to_process limit (%s). Stopping frame processing.",
-                max_frames_to_process,
-            )
-            break
-
     # Final filtering
     landmark_tracker.filter_outlier_points()
 
-    if loop_edges:
+    if enable_pgo and loop_edges:
         logger.info("Optimizing pose graph with %s loop edges and %s odometry edges", len(loop_edges), count - 1)
+        logger.info("Evaluating trajectory before pose graph optimization")
+        metrics_before_pgo = evaluate(
+            landmark_map=landmark_tracker,
+            ground_truth_poses=ground_truth_poses,
+        )
+        _log_evaluation_summary("Before PGO", metrics_before_pgo)
+
         optimized_poses, pgo_stats = optimize_pose_graph(
             keyframes=keyframe_db.records,
             loop_edges=loop_edges,
@@ -316,19 +365,40 @@ def main(
 
         apply_optimized_poses(keyframe_db, landmark_tracker, optimized_poses)
         logger.info("Pose graph optimization stats: %s", pgo_stats)
+        logger.info("Evaluating trajectory after pose graph optimization")
+        metrics_after_pgo = evaluate(
+            landmark_map=landmark_tracker,
+            ground_truth_poses=ground_truth_poses,
+        )
+        _log_evaluation_summary("After PGO", metrics_after_pgo)
+
+    elif loop_edges:
+        logger.info(
+            "Skipping pose graph optimization: disabled; pass --enable_pgo to enable it (%s loop edges available)",
+            len(loop_edges),
+        )
 
     else:
         logger.info("Skipping pose graph optimization: no accepted loop edges")
 
     # Final global BA after all frames processed
-    logger.info("Running final global bundle adjustment after frame processing")
-    final_global_ba_stats = bundle_adjust_global(
-        landmark_map=landmark_tracker,
-        fixed_cameras=1,
-        max_nfev=100,
-        max_points=300,
-    )
-    logger.info("Final global bundle adjustment stats: %s", final_global_ba_stats)
+    if enable_global_ba:
+        logger.info("Running final global bundle adjustment after frame processing")
+        final_global_ba_stats = bundle_adjust_global(
+            landmark_map=landmark_tracker,
+            fixed_cameras=1,
+            max_nfev=global_ba_max_nfev,
+            max_points=global_ba_max_points,
+        )
+        logger.info("Final global bundle adjustment stats: %s", final_global_ba_stats)
+        logger.info("Evaluating trajectory after final global bundle adjustment")
+        metrics_after_global_ba = evaluate(
+            landmark_map=landmark_tracker,
+            ground_truth_poses=ground_truth_poses,
+        )
+        _log_evaluation_summary("After global BA", metrics_after_global_ba)
+    else:
+        logger.info("Skipping final global bundle adjustment: disabled; pass --enable_global_ba to enable it")
 
     # ---- Evaluation ------------------------------------------------------
     logger.info(f"Running Evaluation on {len(landmark_tracker.cameras)} registered frames...")
@@ -441,6 +511,40 @@ if __name__ == "__main__":
         default=50,
         help="Minimum PnP RANSAC inliers required to accept a loop.",
     )
+    parser.add_argument(
+        "--enable_pgo",
+        action="store_true",
+        help="Enable pose graph optimization using accepted loop edges.",
+    )
+    parser.add_argument(
+        "--loop_max_relative_rotation_deg",
+        type=float,
+        default=15.0,
+        help="Reject loop edges whose relative rotation disagrees with current odometry by more than this many degrees.",
+    )
+    parser.add_argument(
+        "--loop_max_relative_translation",
+        type=float,
+        default=10.0,
+        help="Reject loop edges whose relative translation disagrees with current odometry by more than this many scene units.",
+    )
+    parser.add_argument(
+        "--enable_global_ba",
+        action="store_true",
+        help="Enable final full-map bundle adjustment.",
+    )
+    parser.add_argument(
+        "--global_ba_max_nfev",
+        type=int,
+        default=100,
+        help="Maximum function evaluations for final global bundle adjustment.",
+    )
+    parser.add_argument(
+        "--global_ba_max_points",
+        type=int,
+        default=300,
+        help="Maximum landmarks used by final global bundle adjustment.",
+    )
 
     args = parser.parse_args()
 
@@ -455,8 +559,14 @@ if __name__ == "__main__":
         loop_min_temporal_separation=args.loop_min_temporal_separation,
         loop_pnp_min_correspondences=args.loop_pnp_min_correspondences,
         loop_pnp_min_inliers=args.loop_pnp_min_inliers,
+        enable_pgo=args.enable_pgo,
+        loop_max_relative_rotation_deg=args.loop_max_relative_rotation_deg,
+        loop_max_relative_translation=args.loop_max_relative_translation,
         keyframe_max_match_ratio=args.keyframe_max_match_ratio,
         max_frames_to_process=args.max_frames_to_process,
+        enable_global_ba=args.enable_global_ba,
+        global_ba_max_nfev=args.global_ba_max_nfev,
+        global_ba_max_points=args.global_ba_max_points,
     )
 
 """
@@ -465,7 +575,12 @@ python src/visual_slam/run_stereo_slam.py \
     --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
     --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
     --sequence_id 06 --gray_or_color gray --max_frames_to_process 950 \
-    --output_dir outputs/VO/kitti_06_pgo_globalBA \
+    --output_dir outputs/VO/kitti_06_pgo_strict_2_fixed \
+    --loop_pnp_min_correspondences 150 \
+    --loop_pnp_min_inliers 190 \
+    --enable_pgo \
+    --loop_max_relative_rotation_deg 10.0 \
+    --loop_max_relative_translation 15.0 \
     --vlad_cluster_centers_path outputs/vlad_train/seq_07/vlad_cluster_centers.npy
 
         
