@@ -15,7 +15,7 @@ import tempfile
 from typing import List, Optional
 from pathlib import Path
 from scipy.spatial.transform import Rotation, Slerp
-from src.utils.landmark_map import LandmarkMapping, Camera
+from src.modules.landmark_map import LandmarkMapping, Camera
 
 import open3d as o3d
 import scipy.spatial.transform as sst

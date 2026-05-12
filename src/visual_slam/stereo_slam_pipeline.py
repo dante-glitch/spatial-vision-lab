@@ -2,8 +2,8 @@ import cv2
 import logging
 import numpy as np
 from dataclasses import dataclass, field
-from src.utils.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
-from src.utils.landmark_map import LandmarkMapping
+from src.modules.feature_extraction_matching import KeypointFeatureExtractorAndMatcher
+from src.modules.landmark_map import LandmarkMapping
 from typing import Optional
 from ipdb import set_trace
 
@@ -79,7 +79,7 @@ def compte_depths_3D_points_ref_camera(
         if not np.isfinite(disparity) or disparity <= 0:
             continue
 
-        uL, vL = kp.pt
+        uL, vL = kp.pt # 2D pixel coordinates in the left image
 
         Z = (fx * baseline) / disparity
         X = (uL - cx) * Z / fx
@@ -207,9 +207,12 @@ class StereoVisualOdometryPipeline:
             np.asarray(pnp_curr_kp_indices, dtype=np.int32),
             tracked_match_count,
         )
+    
+    def get_last_registered_frame(self) -> dict:
+        return self._prev_frame
 
 
-    def _register_pnp(self, image, left_frame_name, frame, pts_prev, pts_curr, kp, des, matches, R_prev, t_prev, gt_pose):
+    def _register_pnp(self, image, left_frame_name, frame, kp, des, R_prev, t_prev, gt_pose):
         """
         Find 3D↔2D correspondences by propagating landmark observations
         from the previous registered frame into the current frame.
@@ -290,7 +293,7 @@ class StereoVisualOdometryPipeline:
 
         # what to do now?
 
-        return dict(success=True, reason="pnp", n_matches=len(matches),
+        return dict(success=True, reason="pnp", n_matches=len(pts3d_pnp),
                     R_est=R_curr, t_est=t_curr, inlier_point_indices=inlier_point_indices, inlier_curr_kp_indices=inlier_curr_kp_indices, inlier_curr_xy=inlier_curr_xy)
 
 
@@ -357,21 +360,27 @@ class StereoVisualOdometryPipeline:
                         R_est=R0, t_est=t0, reproj_error=0.0)
         
 
-        # match current left frame to previous left frame to get candidate correspondences for PnP
-        matches_left_prev_curr,_ = self.feature_extractor_matcher.match_features(self._prev_frame["des"], left_des, self.ratio_threshold)
-
-        pts_prev = np.float32([self._prev_frame["kp"][m.queryIdx].pt for m in matches_left_prev_curr]).reshape(-1, 2)
-        
-
-        pts_curr = np.asarray(
-            [left_kp[m.trainIdx].pt for m in matches_left_prev_curr],
-            dtype=np.float32,
-        ).reshape(-1, 2)
-
         R_prev = self._prev_frame["R"]
         t_prev = self._prev_frame["t"]
         
-        result = self._register_pnp(frame_left['image'], left_frame_name, frame_left, pts_prev, pts_curr, left_kp, left_des, matches_left_prev_curr, R_prev, t_prev, gt_pose)
+        try:
+            result = self._register_pnp(
+                frame_left["image"],
+                left_frame_name,
+                frame_left,
+                left_kp,
+                left_des,
+                R_prev,
+                t_prev,
+                gt_pose,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "Skipping frame %s due to PnP failure: %s",
+                left_frame_name,
+                exc,
+            )
+            return {"success": False, "reason": "pnp_failure"}
 
         inlier_curr_kp_indices = result['inlier_curr_kp_indices']
         inlier_point_indices = result['inlier_point_indices']
