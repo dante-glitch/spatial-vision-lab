@@ -68,6 +68,8 @@ python src/classical_visual_slam/visual_slam/run_stereo_visual_odometry.py \
 - `--loop_min_temporal_separation`: Minimum frame index distance for loop candidates (default: `40`).
 - `--loop_pnp_min_correspondences`: Minimum 3D-2D correspondences for loop PnP RANSAC (default: `6`).
 - `--loop_pnp_min_inliers`: Minimum PnP RANSAC inliers to accept a loop closure (default: `50`).
+- `--loop_max_relative_rotation_deg`: Reject loop closures whose relative rotation disagrees with current odometry by more than this threshold.
+- `--loop_max_relative_translation`: Reject loop closures whose relative translation disagrees with current odometry by more than this threshold.
 
 ## Outputs
 
@@ -101,6 +103,8 @@ keyframe-only trajectory.
 
 ## Pipeline Summary
 
+![Stereo SLAM system diagram](assets/stereo_slam_system_diagram.svg)
+
 ### Main Processing Loop
 1. Load KITTI calibration, timestamps, stereo images, and ground-truth poses.
 2. Use SIFT features and ratio-test matching for keypoint detection and descriptor computation.
@@ -114,7 +118,7 @@ keyframe-only trajectory.
 ### Periodic Refinement
 - **Local bundle adjustment** (every 20 frames): Refines a sliding window of recent camera poses and their observed 3D points.
 - **Landmark filtering** (every 100 frames): Removes outlier 3D points with invalid depth or low visibility.
-- **Loop detection** (every N keyframes): Query recent frame descriptors against VLAD-encoded keyframe database to detect potential loop closures.
+- **Loop detection** (every N keyframes): Query recent frame descriptors against the VLAD-encoded keyframe database, verify candidates with PnP RANSAC, and reject loop edges whose relative rotation or translation disagrees too strongly with the current odometry estimate.
 
 ### Global Optimization (End-of-Sequence)
 - **Pose graph optimization**: If loop closures are detected, optimize all camera poses and odometry constraints jointly to correct global drift.
@@ -142,7 +146,7 @@ This stereo SLAM system uses a hybrid optimization approach:
 - **Stereo initialization**: First frame plants 3D landmarks from rectified stereo disparity at the origin.
 - **PnP tracking**: Subsequent frames are localized via `solvePnPRansac` using 3D-2D correspondences from recent observations.
 - **Incremental mapping**: New landmarks are continuously added from stereo matches not yet in the map.
-- **Loop detection**: VLAD-based description and re-identification of previously seen places.
+- **Loop detection**: VLAD-based description and re-identification of previously seen places, followed by PnP verification and relative-pose sanity checks.
 - **Pose graph**: Maintains odometry edges (from consecutive keyframes) and loop edges (from closures).
 - **Bundle adjustment**: Both sliding-window local BA and full-map global BA refine geometry and poses.
 

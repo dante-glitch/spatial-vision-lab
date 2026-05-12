@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="360" viewBox="0 0 1100 360" role="img" aria-labelledby="title desc">
+  <title id="title">Stereo SLAM System Diagram</title>
+  <desc id="desc">Simplified stereo SLAM pipeline from stereo input through visual odometry, loop handling, optional optimization, and final outputs.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333"/>
+    </marker>
+    <style>
+      .stage { fill: #f8fafc; stroke: #334155; stroke-width: 1.6; rx: 8; }
+      .opt { fill: #eef6ff; stroke: #2563eb; stroke-width: 1.6; rx: 8; }
+      .title { font: bold 17px Arial, sans-serif; fill: #111827; text-anchor: middle; }
+      .text { font: 14px Arial, sans-serif; fill: #374151; text-anchor: middle; }
+      .line { stroke: #333; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="stage" x="40" y="95" width="205" height="150"/>
+  <text class="title" x="142.5" y="130">Input</text>
+  <text class="text" x="142.5" y="165">KITTI stereo frames</text>
+  <text class="text" x="142.5" y="192">Calibration + timestamps</text>
+  <text class="text" x="142.5" y="219">Ground truth for eval</text>
+
+  <rect class="stage" x="315" y="95" width="220" height="150"/>
+  <text class="title" x="425" y="130">VO Frontend</text>
+  <text class="text" x="425" y="165">SIFT + stereo matching</text>
+  <text class="text" x="425" y="192">PnP RANSAC tracking</text>
+  <text class="text" x="425" y="219">Landmarks + keyframes</text>
+
+  <rect class="stage" x="605" y="55" width="235" height="115"/>
+  <text class="title" x="722.5" y="90">Loop Handling</text>
+  <text class="text" x="722.5" y="122">VLAD retrieval</text>
+  <text class="text" x="722.5" y="147">PnP + relative R/t check</text>
+
+  <rect class="opt" x="605" y="205" width="235" height="95"/>
+  <text class="title" x="722.5" y="240">Optional Optimization</text>
+  <text class="text" x="722.5" y="272">PGO + global BA</text>
+
+  <rect class="stage" x="910" y="95" width="150" height="150"/>
+  <text class="title" x="985" y="130">Output</text>
+  <text class="text" x="985" y="165">KITTI metrics</text>
+  <text class="text" x="985" y="192">Trajectories</text>
+  <text class="text" x="985" y="219">Visualization</text>
+
+  <path class="line" d="M245 170 H315"/>
+  <path class="line" d="M535 145 H605"/>
+  <path class="line" d="M535 205 H605"/>
+  <path class="line" d="M840 112 C875 112, 875 145, 910 145"/>
+  <path class="line" d="M840 252 C875 252, 875 195, 910 195"/>
+</svg>
