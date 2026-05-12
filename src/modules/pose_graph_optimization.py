@@ -88,7 +88,7 @@ def optimize_pose_graph(
         loop_edges: list[PoseGraphEdge],
         odom_weight: float = 1.0,
         loop_weight: float = 1.0,
-        max_nfev: int = 100, 
+        max_nfev: int = 200, 
 ):
     keyframes = sorted(keyframes, key=lambda rec:rec. frame_index)
     

@@ -575,9 +575,9 @@ python src/visual_slam/run_stereo_slam.py \
     --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
     --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
     --sequence_id 06 --gray_or_color gray --max_frames_to_process 950 \
-    --output_dir outputs/VO/kitti_06_pgo_strict_2_fixed \
-    --loop_pnp_min_correspondences 150 \
-    --loop_pnp_min_inliers 190 \
+    --output_dir outputs/VO/kitti_06_pgo_strict_20260511_2 \
+    --loop_pnp_min_correspondences 90 \
+    --loop_pnp_min_inliers 80 \
     --enable_pgo \
     --loop_max_relative_rotation_deg 10.0 \
     --loop_max_relative_translation 15.0 \
