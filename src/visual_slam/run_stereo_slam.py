@@ -423,6 +423,7 @@ def main(
     visualize_trajectories(
         landmark_map=landmark_tracker,
         ground_truth_poses=ground_truth_poses,
+        loop_edges=loop_edges,
         anchor_first_frame=True,
         use_umeyama=True,
         scale_without_umeyama=False, # we can get actual scale from stereo, so no need to scale by the umeyama factor
@@ -575,14 +576,25 @@ python src/visual_slam/run_stereo_slam.py \
     --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
     --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
     --sequence_id 06 --gray_or_color gray --max_frames_to_process 950 \
-    --output_dir outputs/VO/kitti_06_pgo_strict_2_fixed \
-    --loop_pnp_min_correspondences 150 \
-    --loop_pnp_min_inliers 190 \
+    --output_dir outputs/VO/kitti_06_pgo_cluster_loops_20260514 \
+    --loop_pnp_min_correspondences 90 \
+    --loop_pnp_min_inliers 80 \
     --enable_pgo \
     --loop_max_relative_rotation_deg 10.0 \
     --loop_max_relative_translation 15.0 \
     --vlad_cluster_centers_path outputs/vlad_train/seq_07/vlad_cluster_centers.npy
 
-        
+
+    python src/visual_slam/run_stereo_slam.py \
+    --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences \
+    --groundtruth_pose_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_poses_gt/poses \
+    --sequence_id 08 --gray_or_color gray --max_frames_to_process 950 \
+    --output_dir outputs/VO/kitti_08_pgo_20260515 \
+    --loop_pnp_min_correspondences 90 \
+    --loop_pnp_min_inliers 80 \
+    --enable_pgo \
+    --loop_max_relative_rotation_deg 10.0 \
+    --loop_max_relative_translation 15.0 \
+    --vlad_cluster_centers_path outputs/vlad_train/seq_0/vlad_cluster_centers.npy
         
 """

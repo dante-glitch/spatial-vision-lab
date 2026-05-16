@@ -280,9 +280,9 @@ if __name__ == "__main__":
 """
 
 python src/tools/train_vald.py \
-    --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences/07 \
+    --sequence_parent_dir /Users/krishna/Downloads/Datasets/KITTI/data_odometry_gray/sequences/08 \
     --gray_or_color gray \
-    --output_dir /Users/krishna/CodingProjects/spatial-vision-lab/outputs/vlad_train/seq_07 \
+    --output_dir /Users/krishna/CodingProjects/spatial-vision-lab/outputs/vlad_train/seq_08 \
     --every_nth 5 \
     --max_images 3000 \
     --n_features 3000 \

@@ -750,6 +750,59 @@ def _make_polyline(points: np.ndarray, color: tuple[float, float, float]):
     return geometries
 
 
+def _make_loop_edge_geometries(loop_edges, camera_names, points: np.ndarray):
+    if not loop_edges or len(points) == 0:
+        return [], 0
+
+    name_to_idx = {name: idx for idx, name in enumerate(camera_names)}
+    span = _trajectory_span(points)
+    marker_radius = max(0.1, span * 0.004)
+
+    geometries = []
+    line_points = []
+    lines = []
+    line_colors = []
+    valid_count = 0
+
+    loop_start_color = (0.0, 0.75, 0.25)
+    loop_end_color = (1.0, 0.55, 0.0)
+    loop_line_color = (0.05, 0.05, 0.05)
+
+    for edge in loop_edges:
+        source_idx = name_to_idx.get(edge.source)
+        target_idx = name_to_idx.get(edge.target)
+        if source_idx is None or target_idx is None:
+            continue
+
+        source_point = points[source_idx]
+        target_point = points[target_idx]
+
+        start_marker = o3d.geometry.TriangleMesh.create_sphere(radius=marker_radius)
+        start_marker.translate(source_point)
+        start_marker.paint_uniform_color(loop_start_color)
+        geometries.append(start_marker)
+
+        end_marker = o3d.geometry.TriangleMesh.create_sphere(radius=marker_radius)
+        end_marker.translate(target_point)
+        end_marker.paint_uniform_color(loop_end_color)
+        geometries.append(end_marker)
+
+        line_start = len(line_points)
+        line_points.extend([source_point, target_point])
+        lines.append([line_start, line_start + 1])
+        line_colors.append(loop_line_color)
+        valid_count += 1
+
+    if lines:
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(line_points)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+        line_set.colors = o3d.utility.Vector3dVector(line_colors)
+        geometries.append(line_set)
+
+    return geometries, valid_count
+
+
 def _trajectory_path_length(points: np.ndarray) -> float:
     if len(points) < 2:
         return 0.0
@@ -767,6 +820,7 @@ def visualize_trajectories(
     sequence_dir: str | None = None,
     ground_truth_poses: dict | None = None,
     segment_breaks_file: str | None = None,
+    loop_edges=None,
     anchor_first_frame: bool | None = None,
     use_umeyama: bool = True,
     scale_without_umeyama: bool = False,
@@ -791,11 +845,18 @@ def visualize_trajectories(
     geometries = []
     geometries.extend(_make_polyline(traj["est_aligned"], est_color))
     geometries.extend(_make_polyline(traj["gt"], gt_color))
+    loop_geometries, loop_count = _make_loop_edge_geometries(
+        loop_edges,
+        traj["camera_names"],
+        traj["est_aligned"],
+    )
+    geometries.extend(loop_geometries)
 
     origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
     geometries.append(origin)
 
     logger.info("[Viz] Trajectory colors: estimated=red, ground truth=blue")
+    logger.info("[Viz] Loop markers: starts=green, ends=orange, edges=black (%s shown)", loop_count)
     logger.info(
         "[Viz] Umeyama alignment: %s",
         "enabled" if traj["used_umeyama"] else "disabled",

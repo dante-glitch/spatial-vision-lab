@@ -82,18 +82,152 @@ def build_odometry_edges(keyframes, weight: float=1.0) -> list[PoseGraphEdge]:
                 )
 
     return edges
+
+def _filter_anchor_loop_edges(
+        loop_edges: list[PoseGraphEdge],
+        keyframes,
+        min_loop_frame_index: int = 10,
+) -> list[PoseGraphEdge]:
+    frame_index_by_name = {kf.name: kf.frame_index for kf in keyframes}
+    return [
+        edge for edge in loop_edges
+        if frame_index_by_name.get(edge.source, -1) >= min_loop_frame_index
+        and frame_index_by_name.get(edge.target, -1) >= min_loop_frame_index
+    ]
+
+
+def cluster_loop_edges(
+        loop_edges: list[PoseGraphEdge],
+        keyframes,
+        spatial_threshold: float = 5.0,
+        min_loop_frame_index: int = 10,
+) -> list[PoseGraphEdge]:
+    """
+    Cluster loop edges by source and target keyframe proximity to remove redundant constraints.
     
+    Multiple loop edges connecting similar keyframe pairs are grouped together, and only
+    the best quality edge (most keypoint matches = highest weight) from each group is kept.
+    This ensures confident loop closures with plenty of 3D points for accurate pose correction.
+    
+    Args:
+        loop_edges: List of loop closure edges
+        keyframes: List of keyframe records to get positions from
+        spatial_threshold: Max distance between keyframe positions to consider as same group (meters)
+    
+    Returns:
+        Clustered list of loop edges with redundant constraints removed, keeping best matches
+    """
+    if not loop_edges:
+        return []
+
+    loop_edges = _filter_anchor_loop_edges(
+        loop_edges,
+        keyframes,
+        min_loop_frame_index=min_loop_frame_index,
+    )
+    if not loop_edges:
+        return []
+    
+    # Build name to position mapping
+    name_to_pos = {}
+    for kf in keyframes:
+        # Position is the translation component of camera_to_world transform
+        T_wc = camera_to_world_T(kf.R, kf.t)
+        name_to_pos[kf.name] = T_wc[:3, 3]
+    
+    # Union-find for clustering
+    n_edges = len(loop_edges)
+    parent = list(range(n_edges))
+    
+    def find(x):
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+    
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+    
+    # Compare all pairs of edges and cluster similar ones
+    for i in range(n_edges):
+        for j in range(i + 1, n_edges):
+            edge_i = loop_edges[i]
+            edge_j = loop_edges[j]
+            
+            # Get positions of source and target keyframes
+            pos_i_source = name_to_pos.get(edge_i.source)
+            pos_i_target = name_to_pos.get(edge_i.target)
+            pos_j_source = name_to_pos.get(edge_j.source)
+            pos_j_target = name_to_pos.get(edge_j.target)
+            
+            if any(p is None for p in [pos_i_source, pos_i_target, pos_j_source, pos_j_target]):
+                continue
+            
+            # Check if source and target pairs are spatially close
+            source_dist = np.linalg.norm(pos_i_source - pos_j_source)
+            target_dist = np.linalg.norm(pos_i_target - pos_j_target)
+            
+            # If both endpoints are close, they connect the same keyframe pair
+            if source_dist < spatial_threshold and target_dist < spatial_threshold:
+                union(i, j)
+    
+    # Group edges by cluster and select best from each
+    clusters = {}
+    for i in range(n_edges):
+        root = find(i)
+        if root not in clusters:
+            clusters[root] = []
+        clusters[root].append(loop_edges[i])
+    
+    # Select best edge from each cluster (highest weight = most keypoint matches)
+    clustered_edges = []
+    for cluster in clusters.values():
+        # weight = number of inlier matches, so higher is better for pose correction
+        best_edge = max(cluster, key=lambda e: e.weight)
+        clustered_edges.append(best_edge)
+    
+    return clustered_edges
+    
+
 def optimize_pose_graph(
         keyframes,
         loop_edges: list[PoseGraphEdge],
         odom_weight: float = 1.0,
         loop_weight: float = 1.0,
-        max_nfev: int = 100, 
+        max_nfev: int = 500,
+        cluster_loop_edges_enabled: bool = True,
+        spatial_cluster_threshold: float = 10.0,
+        min_loop_frame_index: int = 10,
 ):
     keyframes = sorted(keyframes, key=lambda rec:rec. frame_index)
     
     if len(keyframes) < 2:
         return {}, {"success": True, "reason": "not_enough_keyframes", "n_edges": 0}
+    
+    original_loop_count = len(loop_edges)
+    loop_edges = _filter_anchor_loop_edges(
+        loop_edges,
+        keyframes,
+        min_loop_frame_index=min_loop_frame_index,
+    )
+    if original_loop_count > len(loop_edges):
+        print(f"[PGO] Filtered anchor loop edges: {original_loop_count} → {len(loop_edges)}")
+
+    # Cluster loop edges to remove redundant constraints
+    if cluster_loop_edges_enabled:
+        original_loop_count = len(loop_edges)
+        original_matches = sum(e.weight for e in loop_edges)
+        loop_edges = cluster_loop_edges(
+            loop_edges,
+            keyframes,
+            spatial_threshold=spatial_cluster_threshold,
+            min_loop_frame_index=min_loop_frame_index,
+        )
+        final_matches = sum(e.weight for e in loop_edges)
+        if original_loop_count > len(loop_edges):
+            print(f"[PGO] Clustered loop edges: {original_loop_count} → {len(loop_edges)}")
+            print(f"[PGO] Keypoint matches: {original_matches} → {final_matches} (kept best matches)")
     
     names = [rec.name for rec in keyframes]
     name_to_idx = {name: idx for idx, name in enumerate(names)}
@@ -207,5 +341,3 @@ def apply_optimized_poses(keyframe_db, landmark_map, optimized_camera_to_world: 
 
 
     
-
-
